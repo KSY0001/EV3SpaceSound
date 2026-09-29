@@ -44,4 +44,5 @@ dependencies {
     implementation("androidx.car.app:app-projected:1.4.0")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-common:2.6.2")
+    implementation("androidx.lifecycle:lifecycle-livedata-core:2.6.2")
 }

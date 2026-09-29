@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var btnDemo: Button
     private lateinit var btnCruise: Button
     private lateinit var btnPack: Button
+    private lateinit var btnFocus: Button
     private lateinit var packInfo: TextView
     private lateinit var btnTunnel: Button
     private lateinit var btnBattery: Button
@@ -55,6 +56,21 @@ class MainActivity : Activity() {
         window.statusBarColor = bg
         setContentView(buildUi())
         requestNeededPermissions()
+        carConnection = androidx.car.app.connection.CarConnection(this).also { it.type.observeForever(connObserver) }
+    }
+
+    private var carConnection: androidx.car.app.connection.CarConnection? = null
+    private val connObserver = androidx.lifecycle.Observer<Int> { t ->
+        AppState.projection = when (t) {
+            androidx.car.app.connection.CarConnection.CONNECTION_TYPE_PROJECTION -> "안드로이드 오토 연결됨"
+            androidx.car.app.connection.CarConnection.CONNECTION_TYPE_NATIVE -> "차량 자체 OS"
+            else -> "연결 안 됨"
+        }
+    }
+
+    override fun onDestroy() {
+        carConnection?.type?.removeObserver(connObserver)
+        super.onDestroy()
     }
 
     override fun onResume() { super.onResume(); ui.post(refresh) }
@@ -99,7 +115,7 @@ class MainActivity : Activity() {
         btnService = button("서비스 시작") {
             if (svc == null) { requestNeededPermissions(); EngineService.start(this) } else EngineService.stop(this)
         }
-        btnPower = button("사운드 켜기") { svc?.engine?.let { if (it.powered) it.powerOff() else it.powerOn() } ?: needService() }
+        btnPower = button("사운드 켜기") { svc?.togglePower() ?: needService() }
         root.addView(row(btnService, btnPower))
 
         root.addView(section("사운드 팩"))
@@ -136,6 +152,9 @@ class MainActivity : Activity() {
         root.addView(row(btnCruise, btnTunnel))
         btnBattery = button("") { svc?.controller?.let { it.lowBatteryManual = !it.lowBatteryManual } ?: needService() }
         root.addView(btnBattery, lp(top = 8))
+        btnFocus = button("") { svc?.let { it.setFocus(!it.focusMode) } ?: needService() }
+        root.addView(btnFocus, lp(top = 8))
+        root.addView(text("차에서 소리가 안 나면 켜두세요. 켜면 차가 안드로이드 오토 오디오로 전환되고, 재생 중인 음악은 멈추지 않고 작아집니다.", 12f, muted), lp(top = 4))
 
         root.addView(text("볼륨", 13f, muted), lp(top = 12))
         val vol = SeekBar(this).apply {
@@ -185,18 +204,19 @@ class MainActivity : Activity() {
         if (s == null) {
             status.text = "서비스가 꺼져 있어요.\n'서비스 시작'을 누르면 엔진음 준비가 됩니다."
             meters.text = ""
-            listOf(btnPower, btnPack, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnLog, btnLatency).forEach { it.alpha = 0.4f }
+            listOf(btnPower, btnPack, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnFocus, btnLog, btnLatency).forEach { it.alpha = 0.4f }
             btnPack.text = "팩: " + com.ev3.spacesound.audio.Packs.all[PackPrefs.load(this)].name; packInfo.text = ""
-            btnSource.text = "입력: -"; btnCruise.text = "정속: -"; btnTunnel.text = "터널: -"; btnBattery.text = "배터리 부족 연출: -"
+            btnSource.text = "입력: -"; btnCruise.text = "정속: -"; btnTunnel.text = "터널: -"; btnBattery.text = "배터리 부족 연출: -"; btnFocus.text = "차 오디오 전환: -"
             return
         }
-        listOf(btnPower, btnPack, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnLog, btnLatency).forEach { it.alpha = 1f }
+        listOf(btnPower, btnPack, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnFocus, btnLog, btnLatency).forEach { it.alpha = 1f }
         val c = s.controller; val e = s.engine; val m = s.motion
         btnPower.text = if (e.powered) "사운드 끄기" else "사운드 켜기"
         btnSource.text = "입력: ${c.source.label}"
         btnDemo.text = if (c.demoRunning) "데모 중지" else "데모 주행"
         btnCruise.text = "정속: ${c.cruiseMode.label}"
         btnPack.text = "팩: ${e.pack.name}  (눌러서 다음 팩)"
+        btnFocus.text = "차 오디오 전환: " + if (s.focusMode) "켜짐" else "꺼짐 (음악과 섞기)"
         packInfo.text = e.pack.desc
         btnTunnel.text = "터널: ${c.tunnelMode.label}"
         btnBattery.text = "배터리 부족 연출: " + if (c.lowBatteryManual) "켜짐" else "자동(차량 20% 미만)"
@@ -206,7 +226,9 @@ class MainActivity : Activity() {
         val gps = m.gpsSpeedMs
         val car = AppState.carSpeedKmh
         val sb = StringBuilder()
+        sb.append(String.format(Locale.US, "%-6s %s\n", "AA", AppState.projection))
         sb.append(String.format(Locale.US, "%-6s %s\n", "모드", c.modeLabel))
+        sb.append(String.format(Locale.US, "%-6s %s\n", "오디오", s.focusNote))
         c.demoStep?.let { sb.append(String.format(Locale.US, "%-6s %s\n", "데모", it)) }
         sb.append(String.format(Locale.US, "%-6s %.0f km/h  (가속 %+.2f)\n", "속도", c.speedKmh, c.accelN))
         sb.append(String.format(Locale.US, "%-6s %s · 갱신 %.1fHz · %s\n", "GPS",

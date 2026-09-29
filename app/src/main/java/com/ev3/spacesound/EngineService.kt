@@ -9,7 +9,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.os.Handler
+import android.os.Looper
 import android.os.IBinder
 import android.os.PowerManager
 import com.ev3.spacesound.audio.SynthEngine
@@ -24,6 +28,11 @@ class EngineService : Service() {
     lateinit var logger: DataLogger; private set
     lateinit var latency: LatencyTester; private set
     @Volatile var fgsNote = ""; private set
+    /** Ask for audio focus so the car switches its audio source to Android Auto (music is ducked, not stopped). */
+    @Volatile var focusMode = true; private set
+    @Volatile var focusNote = "없음"; private set
+    private var focusRequest: AudioFocusRequest? = null
+    private val main = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
@@ -53,6 +62,7 @@ class EngineService : Service() {
 
     override fun onDestroy() {
         AppState.service = null
+        abandonFocus()
         controller.stop()
         motion.stop()
         logger.stop()
@@ -62,6 +72,48 @@ class EngineService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    fun togglePower() = setPower(!engine.powered)
+
+    fun setPower(on: Boolean) {
+        if (on) {
+            if (focusMode) requestFocus()
+            engine.powerOn()
+        } else {
+            engine.powerOff()
+            main.postDelayed({ if (!engine.powered) abandonFocus() }, 3500)
+        }
+    }
+
+    fun setFocus(on: Boolean) {
+        focusMode = on
+        if (engine.powered) { if (on) requestFocus() else abandonFocus() }
+    }
+
+    private fun requestFocus() {
+        if (focusRequest != null) return
+        val am = getSystemService(AudioManager::class.java)
+        val attrs = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_GAME)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(attrs)
+            .setOnAudioFocusChangeListener { change ->
+                if (change == AudioManager.AUDIOFOCUS_LOSS) { focusRequest = null; focusNote = "다른 앱이 가져감" }
+            }
+            .build()
+        val granted = am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        focusRequest = if (granted) req else null
+        focusNote = if (granted) "요청됨 (차 오디오 전환)" else "거부됨"
+    }
+
+    private fun abandonFocus() {
+        val am = getSystemService(AudioManager::class.java)
+        focusRequest?.let { am.abandonAudioFocusRequest(it) }
+        focusRequest = null
+        focusNote = "없음"
+    }
 
     fun runLatencyTest(onProgress: (String) -> Unit) {
         if (AppState.latencyRunning) return

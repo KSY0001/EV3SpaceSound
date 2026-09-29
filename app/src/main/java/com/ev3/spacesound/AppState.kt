@@ -33,7 +33,9 @@ object AppState {
     @Volatile var carSpeedNanos = 0L
     val carSpeedRate = RateCounter()
     @Volatile var carBatteryPct = Float.NaN
-    @Volatile var carDataNote = "안드로이드 오토 미연결"
+    @Volatile var carDataNote = "차 화면에서 앱 미실행"
+    /** Android Auto projection state from CarConnection, set by the phone UI. */
+    @Volatile var projection = "확인 중"
 
     @Volatile var latencySummary = "측정 전"
     @Volatile var latencyRunning = false

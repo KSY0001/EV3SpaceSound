@@ -37,7 +37,7 @@ class SpaceSession : Session() {
     override fun onCreateScreen(intent: Intent): Screen {
         AppState.carDataNote = "권한 확인 중"
         lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onDestroy(owner: LifecycleOwner) { unregister(); AppState.carDataNote = "안드로이드 오토 미연결" }
+            override fun onDestroy(owner: LifecycleOwner) { unregister(); AppState.carDataNote = "차 화면에서 앱 미실행" }
         })
         requestCarPermissions()
         return MainCarScreen(carContext)

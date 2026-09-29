@@ -76,7 +76,7 @@ class MainCarScreen(carContext: CarContext) : Screen(carContext) {
             )
             pane.addAction(
                 Action.Builder().setTitle(if (e.powered) "사운드 끄기" else "사운드 켜기")
-                    .setOnClickListener { if (e.powered) e.powerOff() else e.powerOn(); invalidate() }
+                    .setOnClickListener { svc.togglePower(); invalidate() }
                     .build()
             )
             pane.addAction(
