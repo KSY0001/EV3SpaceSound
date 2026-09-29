@@ -167,6 +167,22 @@ class MainActivity : Activity() {
         }
         root.addView(vol)
 
+        val bassLabel = text("저음 강도  +${PackPrefs.loadBass(this)} dB", 13f, muted)
+        root.addView(bassLabel, lp(top = 12))
+        val bass = SeekBar(this).apply {
+            max = 15; progress = PackPrefs.loadBass(this@MainActivity)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                    bassLabel.text = "저음 강도  +$p dB"
+                    svc?.engine?.bassDb = p.toFloat()
+                    if (fromUser) PackPrefs.saveBass(this@MainActivity, p)
+                }
+                override fun onStartTrackingTouch(s: SeekBar?) {}
+                override fun onStopTrackingTouch(s: SeekBar?) {}
+            })
+        }
+        root.addView(bass)
+
         root.addView(section("반응 지연 측정"))
         root.addView(text("차에 연결한 상태에서, 주차 중에 조용히 측정하세요. 폰을 평소 거치 위치에 두고 음악은 끄세요. 짧은 '삑' 소리가 7번 납니다.", 12f, muted))
         btnLatency = button("지연 측정 시작") {

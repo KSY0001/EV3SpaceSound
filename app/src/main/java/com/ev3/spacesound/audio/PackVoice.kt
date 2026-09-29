@@ -38,6 +38,12 @@ internal class PackVoice(val pack: SoundPack, private val sr: Int, private val k
     private val dLP = Biquad(sr)
     private val dF = Sm(d.base); private val dCut = Sm(d.cut); private val dGain = Sm(0.0); private val dBreath = Sm(0.0)
     private var breathPh = 0.0
+    private val satNorm = 1.0 / kotlin.math.tanh(d.drive)
+    private val satBias = kotlin.math.tanh(0.25)
+    private val rumbleNoise = Noise()
+    private val rumbleCoef = kotlin.math.exp(-2 * PI * 22.0 / sr)
+    private var rumbleLp = 0.0
+    private val rumbleGain = Sm(0.0)
     private var flicker = 1.0
 
     // pulse
@@ -115,6 +121,7 @@ internal class PackVoice(val pack: SoundPack, private val sr: Int, private val k
         flicker = if (lowBattery && flickerNow) 0.25 else 1.0
         dGain.to(dg, k(0.08))
         dBreath.to(if (speed < 3) d.breath else d.breath * 0.25, k(0.4))
+        rumbleGain.to(d.rumble * 10 * (0.4 + ap + s * 0.5), k(0.1))
         dLP.lowpass(dCut.v, d.q)
         meters[0] = dg / (d.gain + d.gainA)
 
@@ -175,6 +182,8 @@ internal class PackVoice(val pack: SoundPack, private val sr: Int, private val k
         for (v in dDt.indices) dDt[v] = df * d.voices[v].ratio / srD
         val dg = dGain.v * flicker; val br = dBreath.v
         val dBr = 0.35 / srD
+        val rg = rumbleGain.v
+        val drive = d.drive
         val pulse = pack.pulse
         val pDt = pulseRate.v / srD
 
@@ -206,7 +215,10 @@ internal class PackVoice(val pack: SoundPack, private val sr: Int, private val k
                 dsum += waveSample(vo.wave, dPh[v], dDt[v]) * vo.gain
                 var p = dPh[v] + dDt[v]; if (p >= 1) p -= 1; dPh[v] = p
             }
-            val droneOut = dLP.process(dsum) * (dg + br * sin(2 * PI * breathPh))
+            rumbleLp = rumbleNoise.next() * (1 - rumbleCoef) + rumbleLp * rumbleCoef
+            val lowpassed = dLP.process(dsum)
+            val saturated = (kotlin.math.tanh(drive * lowpassed + 0.25) - satBias) * satNorm
+            val droneOut = saturated * (dg + br * sin(2 * PI * breathPh) + rg * rumbleLp)
             breathPh += dBr; if (breathPh >= 1) breathPh -= 1
 
             val pulseGain = if (pulse != null) {
@@ -224,7 +236,7 @@ internal class PackVoice(val pack: SoundPack, private val sr: Int, private val k
                 val raw = waveSample(w.wave, wPh1, dt1) + w.secondGain * waveSample(w.wave, wPh2, dt2)
                 wPh1 += dt1; if (wPh1 >= 1) wPh1 -= 1
                 wPh2 += dt2; if (wPh2 >= 1) wPh2 -= 1
-                sample += wFilter.process(raw) * wg
+                sample += wFilter.process(raw) * wg * 0.75
             }
 
             if (nl != null) sample += nFilter.process(noise.next()) * ng

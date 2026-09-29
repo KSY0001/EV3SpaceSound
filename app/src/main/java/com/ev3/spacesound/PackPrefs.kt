@@ -11,6 +11,13 @@ object PackPrefs {
     fun load(context: Context): Int =
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getInt(KEY, 1).coerceIn(0, Packs.all.size - 1)
 
+    fun loadBass(context: Context): Int =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getInt("bass", 9).coerceIn(0, 15)
+
+    fun saveBass(context: Context, db: Int) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putInt("bass", db).apply()
+    }
+
     fun save(context: Context, index: Int) {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putInt(KEY, index).apply()
     }

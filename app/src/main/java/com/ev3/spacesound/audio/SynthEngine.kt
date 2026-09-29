@@ -30,6 +30,8 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
     @Volatile var inTunnel = false
     @Volatile var inLowBattery = false
     @Volatile var userVolume = 0.8f
+    /** Bass shelf boost in dB (0..15). */
+    @Volatile var bassDb = 9f
     /** Silences the engine (not the test click) during a latency measurement. */
     @Volatile var testMute = false
 
@@ -75,6 +77,17 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
     private var masterTc = 0.6
     private val wet = Sm(0.0); private val dry = Sm(1.0)
     private val reverb = Reverb(sampleRate)
+
+    // master EQ + compressor
+    private val eqBass = Biquad(sampleRate)
+    private val eqMud = Biquad(sampleRate).also { it.peaking(380.0, -2.5, 0.8) }
+    private val eqTop = Biquad(sampleRate).also { it.lowpass(7500.0, 0.7) }
+    private var appliedBass = Float.NaN
+    private val compThr = 10.0.pow(-22.0 / 20)
+    private val compRatio = 5.0
+    private val compAtk = exp(-1.0 / (0.005 * sampleRate))
+    private val compRel = exp(-1.0 / (0.2 * sampleRate))
+    private var compEnv = 0.0
 
     private var voice = PackVoice(pack, sampleRate, k, 1.0)
     private var oldVoice: PackVoice? = null
@@ -258,6 +271,8 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
             braams.removeAll { it.done }
 
             val mg = master.v; val wetG = wet.v; val dryG = dry.v
+            val bdb = bassDb
+            if (bdb != appliedBass) { eqBass.lowshelf(90.0, bdb.toDouble()); appliedBass = bdb }
             for (i in 0 until n) {
                 // sparkle voices + echo
                 var blip = 0.0
@@ -295,9 +310,13 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
                     if (t > swDur + 0.3) swActive = false
                 }
 
-                val sum = bus[i] + blip + echoOut + sweepOut
-                val mixed = sum * dryG + reverb.process(sum) * wetG
-                var s = softClip(mixed * mg * 1.2) * 0.85
+                val sum = eqTop.process(eqMud.process(eqBass.process(bus[i] + blip + echoOut + sweepOut)))
+                val mixed = (sum * dryG + reverb.process(sum) * wetG) * mg
+                // compressor: glue the layers and lift perceived loudness
+                val lvl = kotlin.math.abs(mixed)
+                compEnv = if (lvl > compEnv) lvl + (compEnv - lvl) * compAtk else lvl + (compEnv - lvl) * compRel
+                val gr = if (compEnv > compThr) compThr * (compEnv / compThr).pow(1 / compRatio) / compEnv else 1.0
+                var s = softClip(mixed * gr * 1.5) * 0.9
 
                 if (clickLeft > 0) {
                     s += 0.9 * sin(2 * PI * clickPhase)

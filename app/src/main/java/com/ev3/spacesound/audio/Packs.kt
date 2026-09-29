@@ -8,6 +8,10 @@ data class Drone(
     val base: Double, val range: Double, val voices: List<DroneVoice>,
     val cut: Double, val cutA: Double, val cutS: Double, val q: Double,
     val gain: Double, val gainA: Double, val breath: Double,
+    /** Saturation amount: adds harmonics so the low drone is heard on car speakers. */
+    val drive: Double = 2.2,
+    /** Slow random amplitude wobble that gives a big-engine feel. */
+    val rumble: Double = 0.12,
 )
 data class Pulse(val rate: Double, val rateS: Double, val rateA: Double, val depth: Double, val pad: Boolean)
 data class Whine(
@@ -50,7 +54,7 @@ object Packs {
         SoundPack(
             "ion", "이온 드라이브", "기본 팩. 저음 험 위로 터빈 휘슬, 회생 때 충전음",
             drone = Drone(42.0, 70.0, listOf(DroneVoice(S, 1.0, 1.0), DroneVoice(T, 1.012, 1.0), DroneVoice(S, 2.0, .3)),
-                250.0, 900.0, 300.0, .7, .28, .1, .12),
+                250.0, 900.0, 300.0, .7, .3, .12, .12, drive = 2.6, rumble = .14),
             whine = Whine(W, BP, 180.0, 1700.0, 120.0, -90.0, 6.0, .004, .012, .05, .05, .03, 1.5, .5),
             noise = NoiseLayer(BP, 600.0, 3500.0, 800.0, 1.2, .22, .05, 0.0),
             pad = Pad(W, 110.0, 1.0, listOf(0.0, 7.0, 12.03), listOf(0.0), 180.0, 2600.0, 500.0, 4.0, .035, .06, .02),
@@ -89,7 +93,7 @@ object Packs {
         SoundPack(
             "jet", "스텔스 제트", "쌍발 터빈과 거센 바람, 감속 시 스풀다운",
             drone = Drone(30.0, 40.0, listOf(DroneVoice(W, 1.0, .5), DroneVoice(S, 1.0, 1.0)),
-                160.0, 400.0, 250.0, .7, .24, .1, .04),
+                160.0, 400.0, 250.0, .7, .26, .12, .04, drive = 3.0, rumble = .2),
             whine = Whine(W, BP, 400.0, 2600.0, 220.0, -320.0, 8.0, .01, .02, .07, .06, .05, 1.007, .9),
             noise = NoiseLayer(BP, 900.0, 3000.0, 1500.0, .8, .3, .14, .07),
             space = .05,
@@ -99,7 +103,7 @@ object Packs {
         SoundPack(
             "deep", "딥 스페이스", "조용한 앰비언트 화음과 넓은 공간감",
             drone = Drone(48.0, 30.0, listOf(DroneVoice(S, 1.0, 1.0), DroneVoice(S, 1.5, .25)),
-                300.0, 300.0, 150.0, .5, .2, .06, .08),
+                300.0, 300.0, 150.0, .5, .22, .06, .08, drive = 1.6, rumble = .05),
             whine = Whine(S, BP, 523.3, 523.0, 30.0, -30.0, 3.0, .002, .003, .008, .008, .004, 1.5, .5),
             pad = Pad(T, 130.8, .3, listOf(0.0, 7.0, 12.0, 16.0, 19.0, 24.0), listOf(-5.0, 5.0), 1200.0, 1600.0, 400.0, .7, .028, .02, .012, 1.2),
             shepard = Shepard(5, 65.4, 5.0, .008, .05, .04, .012, .02, .015, .005, 1600.0),
@@ -112,7 +116,7 @@ object Packs {
         SoundPack(
             "retro", "레트로 SF", "테레민 같은 멜로디 톤과 8비트 아르페지오",
             drone = Drone(55.0, 30.0, listOf(DroneVoice(Q, 1.0, .5), DroneVoice(S, 1.0, 1.0)),
-                380.0, 500.0, 200.0, 1.0, .16, .06, .06),
+                380.0, 500.0, 200.0, 1.0, .16, .06, .06, drive = 1.5, rumble = 0.0),
             whine = Whine(S, LP, 220.0, 660.0, 40.0, -60.0, .5, .035, .04, .03, .03, .02, 2.0, .12, vibRate = 5.5, vibDepth = .02),
             spark = Spark(Q, listOf(523.3, 659.3, 784.0, 1046.5, 1318.5, 1568.0), .45, .15, .4),
             space = .15,

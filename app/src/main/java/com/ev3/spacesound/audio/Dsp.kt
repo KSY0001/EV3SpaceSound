@@ -3,7 +3,9 @@ package com.ev3.spacesound.audio
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.pow
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /** RBJ biquad in transposed direct form II. Bandpass uses constant 0 dB peak gain, like Web Audio. */
 class Biquad(private val sampleRate: Int) {
@@ -25,6 +27,30 @@ class Biquad(private val sampleRate: Int) {
         val a0 = 1 + alpha
         b0 = alpha / a0; b1 = 0.0; b2 = -alpha / a0
         a1 = -2 * c / a0; a2 = (1 - alpha) / a0
+    }
+
+    /** RBJ low shelf with slope 1. */
+    fun lowshelf(freq: Double, gainDb: Double) {
+        val a = 10.0.pow(gainDb / 40)
+        val w = 2 * PI * freq.coerceIn(10.0, sampleRate * 0.45) / sampleRate
+        val c = cos(w); val alpha = sin(w) / 2 * sqrt(2.0)
+        val sa = 2 * sqrt(a) * alpha
+        val a0 = (a + 1) + (a - 1) * c + sa
+        b0 = a * ((a + 1) - (a - 1) * c + sa) / a0
+        b1 = 2 * a * ((a - 1) - (a + 1) * c) / a0
+        b2 = a * ((a + 1) - (a - 1) * c - sa) / a0
+        a1 = -2 * ((a - 1) + (a + 1) * c) / a0
+        a2 = ((a + 1) + (a - 1) * c - sa) / a0
+    }
+
+    /** RBJ peaking EQ. */
+    fun peaking(freq: Double, gainDb: Double, q: Double) {
+        val a = 10.0.pow(gainDb / 40)
+        val (w, alpha) = prep(freq, q)
+        val c = cos(w)
+        val a0 = 1 + alpha / a
+        b0 = (1 + alpha * a) / a0; b1 = -2 * c / a0; b2 = (1 - alpha * a) / a0
+        a1 = -2 * c / a0; a2 = (1 - alpha / a) / a0
     }
 
     private fun prep(freq: Double, q: Double): Pair<Double, Double> {
