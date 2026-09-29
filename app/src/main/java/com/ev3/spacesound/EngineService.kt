@@ -65,7 +65,7 @@ class EngineService : Service() {
 
     fun runLatencyTest(onProgress: (String) -> Unit) {
         if (AppState.latencyRunning) return
-        Thread({ latency.run(onProgress = onProgress) }, "latency-test").start()
+        Thread({ latency.measure(onProgress = onProgress) }, "latency-test").start()
     }
 
     private fun granted(p: String) = checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED

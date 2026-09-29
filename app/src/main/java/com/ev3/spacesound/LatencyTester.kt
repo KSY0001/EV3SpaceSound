@@ -31,7 +31,7 @@ class LatencyTester(
     data class Result(val medianMs: Double, val minMs: Double, val maxMs: Double, val ok: Int, val total: Int, val note: String)
 
     @SuppressLint("MissingPermission")
-    fun run(trials: Int = 7, onProgress: (String) -> Unit): Result? {
+    fun measure(trials: Int = 7, onProgress: (String) -> Unit): Result? {
         if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             onProgress("마이크 권한이 없어요. 폰 앱에서 권한을 허용해 주세요."); return null
         }

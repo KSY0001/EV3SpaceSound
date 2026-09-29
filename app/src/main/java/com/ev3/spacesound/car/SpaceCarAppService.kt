@@ -4,7 +4,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.SystemClock
-import androidx.car.app.CarAppApiLevels
+import androidx.car.app.versioning.CarAppApiLevels
 import androidx.car.app.CarAppService
 import androidx.car.app.Screen
 import androidx.car.app.Session
