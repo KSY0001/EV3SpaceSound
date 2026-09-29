@@ -34,6 +34,8 @@ class MainActivity : Activity() {
     private lateinit var btnSource: Button
     private lateinit var btnDemo: Button
     private lateinit var btnCruise: Button
+    private lateinit var btnPack: Button
+    private lateinit var packInfo: TextView
     private lateinit var btnTunnel: Button
     private lateinit var btnBattery: Button
     private lateinit var btnLog: Button
@@ -99,6 +101,17 @@ class MainActivity : Activity() {
         }
         btnPower = button("사운드 켜기") { svc?.engine?.let { if (it.powered) it.powerOff() else it.powerOn() } ?: needService() }
         root.addView(row(btnService, btnPower))
+
+        root.addView(section("사운드 팩"))
+        btnPack = button("") {
+            svc?.engine?.let {
+                val next = (it.packIndex + 1) % com.ev3.spacesound.audio.Packs.all.size
+                it.selectPack(next); PackPrefs.save(this, next)
+            } ?: needService()
+        }
+        root.addView(btnPack, lp(top = 8))
+        packInfo = text("", 12f, muted)
+        root.addView(packInfo, lp(top = 4))
 
         root.addView(section("입력"))
         btnSource = button("") {
@@ -172,16 +185,19 @@ class MainActivity : Activity() {
         if (s == null) {
             status.text = "서비스가 꺼져 있어요.\n'서비스 시작'을 누르면 엔진음 준비가 됩니다."
             meters.text = ""
-            listOf(btnPower, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnLog, btnLatency).forEach { it.alpha = 0.4f }
+            listOf(btnPower, btnPack, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnLog, btnLatency).forEach { it.alpha = 0.4f }
+            btnPack.text = "팩: " + com.ev3.spacesound.audio.Packs.all[PackPrefs.load(this)].name; packInfo.text = ""
             btnSource.text = "입력: -"; btnCruise.text = "정속: -"; btnTunnel.text = "터널: -"; btnBattery.text = "배터리 부족 연출: -"
             return
         }
-        listOf(btnPower, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnLog, btnLatency).forEach { it.alpha = 1f }
+        listOf(btnPower, btnPack, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnLog, btnLatency).forEach { it.alpha = 1f }
         val c = s.controller; val e = s.engine; val m = s.motion
         btnPower.text = if (e.powered) "사운드 끄기" else "사운드 켜기"
         btnSource.text = "입력: ${c.source.label}"
         btnDemo.text = if (c.demoRunning) "데모 중지" else "데모 주행"
         btnCruise.text = "정속: ${c.cruiseMode.label}"
+        btnPack.text = "팩: ${e.pack.name}  (눌러서 다음 팩)"
+        packInfo.text = e.pack.desc
         btnTunnel.text = "터널: ${c.tunnelMode.label}"
         btnBattery.text = "배터리 부족 연출: " + if (c.lowBatteryManual) "켜짐" else "자동(차량 20% 미만)"
         btnLog.text = if (s.logger.active) "기록 중지 (${s.logger.rows}행)" else "기록 시작"
@@ -205,7 +221,8 @@ class MainActivity : Activity() {
         if (s.fgsNote.isNotEmpty()) sb.append("\n⚠ ").append(s.fgsNote)
         status.text = sb.toString()
 
-        meters.text = "코어 ${bar(e.meterCore)}\n터빈 ${bar(e.meterWhine)}\n에너지 ${bar(e.meterEnergy)}\n패드 ${bar(e.meterPad)}\n충전 ${bar(e.meterSpark)}"
+        val mm = e.meters
+        meters.text = "드론 ${bar(mm[0])}\n톤   ${bar(mm[1])}\n에너지 ${bar(mm[2])}\n패드 ${bar(mm[3])}\n라이저 ${bar(mm[4])}\n충전 ${bar(mm[5])}"
     }
 
     private fun ageText(ms: Long) = if (ms == Long.MAX_VALUE) "수신 없음" else String.format(Locale.US, "%.1fs 전", ms / 1000.0)

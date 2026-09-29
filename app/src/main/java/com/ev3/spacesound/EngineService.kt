@@ -31,7 +31,7 @@ class EngineService : Service() {
         val am = getSystemService(AudioManager::class.java)
         val sr = am.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: 48000
         val burst = am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 192
-        engine = SynthEngine(sr, burst)
+        engine = SynthEngine(sr, burst, PackPrefs.load(this))
         motion = MotionTracker(this)
         logger = DataLogger(this)
         controller = DriveController(engine, motion, logger)

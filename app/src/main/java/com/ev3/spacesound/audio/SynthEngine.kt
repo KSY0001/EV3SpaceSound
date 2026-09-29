@@ -6,7 +6,6 @@ import android.media.AudioTrack
 import android.os.Process
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.max
@@ -15,13 +14,14 @@ import kotlin.math.pow
 import kotlin.math.sin
 
 /**
- * Spaceship-style EV sound, ported from the browser prototype.
- * Layers: core hum, turbine whine, energy noise, harmonic pad, regen sparkle (with echo),
- * boot/shutdown sweeps and a tunnel reverb. Rendered on its own thread into a low-latency AudioTrack.
+ * Spaceship-style EV sound engine with switchable sound packs (see [Packs]).
+ * Shared parts live here: master gain, tunnel/space reverb, regen sparkle + echo,
+ * boot/shutdown sweeps, braam swells and the latency test click.
+ * Each pack is rendered by a [PackVoice]; switching packs crossfades two voices.
  *
- * Inputs (set from any thread): speed in km/h, normalized acceleration -1..1, duck factor, tunnel flag.
+ * Inputs are set from any thread: speed in km/h, normalized acceleration -1..1, duck, tunnel.
  */
-class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
+class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1) {
 
     // ---- inputs ----
     @Volatile var inSpeedKmh = 0f
@@ -35,11 +35,10 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
 
     // ---- outputs for UI ----
     @Volatile var powered = false; private set
-    @Volatile var meterCore = 0f; private set
-    @Volatile var meterWhine = 0f; private set
-    @Volatile var meterEnergy = 0f; private set
-    @Volatile var meterPad = 0f; private set
-    @Volatile var meterSpark = 0f; private set
+    @Volatile var packIndex = initialPack.coerceIn(0, Packs.all.size - 1); private set
+    val pack: SoundPack get() = Packs.all[packIndex]
+    /** drone, tone, energy, pad, riser, regen — each 0..1 */
+    val meters = FloatArray(6)
     /** System.nanoTime() just before the block that starts a test click was handed to AudioTrack. */
     @Volatile var clickWrittenNanos = 0L; private set
     @Volatile var bufferFrames = 0; private set
@@ -50,11 +49,14 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
         object PowerOn : Cmd()
         object PowerOff : Cmd()
         object Click : Cmd()
+        class SetPack(val index: Int) : Cmd()
     }
     private val cmds = ConcurrentLinkedQueue<Cmd>()
 
     fun powerOn() = cmds.add(Cmd.PowerOn)
     fun powerOff() = cmds.add(Cmd.PowerOff)
+    fun selectPack(index: Int) = cmds.add(Cmd.SetPack(index.coerceIn(0, Packs.all.size - 1)))
+    fun nextPack() = selectPack((packIndex + 1) % Packs.all.size)
     /** Queue a short 2 kHz click mixed after the master gain. Resets [clickWrittenNanos] to 0 first. */
     fun requestClick() { clickWrittenNanos = 0L; cmds.add(Cmd.Click) }
 
@@ -63,46 +65,40 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
     private var thread: Thread? = null
     @Volatile private var running = false
     private val blockSec = blockFrames.toDouble() / sampleRate
-    private var clock = 0L // samples rendered
+    private var clock = 0L
     private val rng = java.util.Random()
 
-    private class Sm(var v: Double) { fun to(t: Double, k: Double) { v += (t - v) * k } }
     private val kCache = HashMap<Double, Double>()
-    private fun k(tc: Double) = kCache.getOrPut(tc) { smoothK(tc, blockSec) }
+    private val k: (Double) -> Double = { tc -> kCache.getOrPut(tc) { smoothK(tc, blockSec) } }
 
     private val master = Sm(0.0)
     private var masterTc = 0.6
-    private val coreF = Sm(42.0); private val coreCut = Sm(250.0); private val coreGain = Sm(0.0); private val lfoDepth = Sm(0.0)
-    private val whineF = Sm(180.0); private val whineGain = Sm(0.0)
-    private val energyF = Sm(600.0); private val energyGain = Sm(0.0)
-    private val padRoot = Sm(110.0); private val padCut = Sm(180.0); private val padGain = Sm(0.0)
     private val wet = Sm(0.0); private val dry = Sm(1.0)
+    private val reverb = Reverb(sampleRate)
 
-    private val coreLP = Biquad(sampleRate); private val whineBP = Biquad(sampleRate)
-    private val energyBP = Biquad(sampleRate); private val padLP = Biquad(sampleRate); private val sweepLP = Biquad(sampleRate)
-    private val noise = Noise(); private val reverb = Reverb(sampleRate)
-
-    private var pC1 = 0.0; private var pC2 = 0.0; private var pC3 = 0.0; private var pLfo = 0.0
-    private var pW1 = 0.0; private var pW2 = 0.0
-    private var pP1 = 0.0; private var pP2 = 0.0; private var pP3 = 0.0
+    private var voice = PackVoice(pack, sampleRate, k, 1.0)
+    private var oldVoice: PackVoice? = null
+    private val braams = ArrayList<BraamVoice>()
+    private val bus = DoubleArray(blockFrames)
 
     // regen sparkle voices + echo
     private val nVoices = 12
     private val vFreq = DoubleArray(nVoices); private val vPhase = DoubleArray(nVoices)
     private val vAmp = DoubleArray(nVoices); private val vPeak = DoubleArray(nVoices); private val vStage = IntArray(nVoices)
+    private val vWave = Array(nVoices) { Wave.SINE }
     private var nextVoice = 0
     private val blipDecay = exp(ln(1e-4) / (0.344 * sampleRate))
     private val blipAttack = 1.0 / (0.006 * sampleRate)
-    private val echo = DoubleArray((0.18 * sampleRate).toInt()); private var echoI = 0
+    private val echo = DoubleArray((0.5 * sampleRate).toInt()); private var echoI = 0
+    private var echoLen = (0.18 * sampleRate).toInt(); private var echoFb = 0.38
     private var sparkAcc = 0.0
     private var sparkLevel = 0.0
-    private val scale = doubleArrayOf(1318.5, 1568.0, 1760.0, 2093.0, 2349.3, 2637.0, 3136.0)
 
     // boot / shutdown sweep
     private var swActive = false; private var swF0 = 0.0; private var swF1 = 0.0; private var swDur = 0.0
     private var swVol = 0.0; private var swPos = 0L; private var swP1 = 0.0; private var swP2 = 0.0
+    private val sweepLP = Biquad(sampleRate).also { it.lowpass(2000.0, 2.0) }
 
-    // scheduled events (audio thread only)
     private data class Ev(val at: Long, val run: () -> Unit)
     private val events = ArrayList<Ev>()
 
@@ -111,8 +107,10 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
     private val clickLen = (0.005 * sampleRate).toInt()
 
     private var flickerTimer = 0.0
-    private var flickerCore = 1.0
-    private var flickerWhine = 1.0
+    private var flickerNow = false
+    private var jitter = 1.0
+
+    init { applyEcho(pack) }
 
     fun start() {
         if (running) return
@@ -173,15 +171,25 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
         }
     }
 
-    private fun startBlip(f: Double, vol: Double) {
+    private fun applyEcho(p: SoundPack) {
+        echoLen = ((p.spark?.echo ?: 0.18) * sampleRate).toInt().coerceIn(1, echo.size)
+        echoFb = p.spark?.fb ?: 0.38
+    }
+
+    private fun startBlip(f: Double, vol: Double, wave: Wave) {
         var idx = -1
         for (i in 0 until nVoices) if (vStage[i] == 0) { idx = i; break }
         if (idx < 0) { idx = nextVoice; nextVoice = (nextVoice + 1) % nVoices }
-        vFreq[idx] = f; vPhase[idx] = 0.0; vAmp[idx] = 0.0; vPeak[idx] = vol; vStage[idx] = 1
+        vFreq[idx] = f; vPhase[idx] = 0.0; vAmp[idx] = 0.0; vPeak[idx] = vol; vStage[idx] = 1; vWave[idx] = wave
     }
 
-    private fun startSweep(f0: Double, f1: Double, dur: Double, vol: Double) {
-        swActive = true; swF0 = f0; swF1 = f1; swDur = dur; swVol = vol; swPos = 0
+    private fun startSweep(s: Sweep) {
+        swActive = true; swF0 = s.f0; swF1 = s.f1; swDur = s.dur; swVol = s.vol; swPos = 0
+    }
+
+    private fun startBraam(b: Braam) {
+        if (braams.size >= 2) braams.removeAt(0)
+        braams.add(BraamVoice(b, sampleRate))
     }
 
     private fun schedule(delaySec: Double, run: () -> Unit) {
@@ -191,21 +199,37 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
     private fun handleCommands(): Boolean {
         var click = false
         while (true) {
-            when (cmds.poll() ?: break) {
+            when (val c = cmds.poll() ?: break) {
                 Cmd.PowerOn -> {
                     powered = true
+                    val p = pack
                     masterTc = 0.35
-                    startSweep(40.0, 900.0, 1.4, 0.12)
-                    schedule(1.35) { startBlip(1568.0, 0.08) }
-                    schedule(1.49) { startBlip(2349.3, 0.07) }
-                    schedule(1.6) { masterTc = 1.2 }
+                    p.boot.sweep?.let { startSweep(it) }
+                    if (p.boot.braam) p.braam?.let { b -> schedule(0.3) { startBraam(b) } }
+                    for (ch in p.boot.chime) schedule(ch.at) { startBlip(ch.f, ch.vol, p.boot.chimeWave) }
+                    val bootLen = max(1.6, (p.boot.chime.maxOfOrNull { it.at } ?: 0.0) + 0.2)
+                    schedule(bootLen) { masterTc = 1.2 }
                 }
                 Cmd.PowerOff -> {
                     powered = false
-                    masterTc = 0.6
-                    startSweep(900.0, 30.0, 1.6, 0.1)
+                    val s = pack.shutdown
+                    masterTc = (s.dur + 0.3) / 3
+                    startSweep(s)
                 }
                 Cmd.Click -> { clickLeft = clickLen; clickPhase = 0.0; click = true }
+                is Cmd.SetPack -> if (c.index != packIndex) {
+                    packIndex = c.index
+                    val p = pack
+                    if (powered) {
+                        oldVoice = voice.also { it.fadeTarget = 0.0 }
+                        voice = PackVoice(p, sampleRate, k, 0.0)
+                        p.boot.chime.firstOrNull()?.let { startBlip(it.f, 0.05, p.boot.chimeWave) }
+                    } else {
+                        oldVoice = null
+                        voice = PackVoice(p, sampleRate, k, 1.0)
+                    }
+                    applyEcho(p)
+                }
             }
         }
         if (events.isNotEmpty()) {
@@ -222,52 +246,19 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
 
         val n = out.size
         val sr = sampleRate.toDouble()
-        val silentEngine = master.v < 1e-5 && !powered && !swActive && vStage.all { it == 0 }
+        val silentEngine = master.v < 1e-5 && !powered && !swActive && braams.isEmpty() && vStage.all { it == 0 }
 
         if (silentEngine) {
             java.util.Arrays.fill(out, 0f)
         } else {
-            val cf = coreF.v
-            val dC1 = cf / sr; val dC2 = cf * 1.012 / sr; val dC3 = cf * 2 / sr
-            val dLfo = 0.35 / sr
-            val wf = whineF.v
-            val dW1 = wf / sr; val dW2 = wf * 1.5 / sr
-            val root = padRoot.v
-            val dP1 = root / sr; val dP2 = root * 1.5 / sr; val dP3 = root * 2.003 / sr
-            coreLP.lowpass(coreCut.v, 0.7)
-            whineBP.bandpass(wf, 6.0)
-            energyBP.bandpass(energyF.v, 1.2)
-            padLP.lowpass(padCut.v, 4.0)
-            sweepLP.lowpass(2000.0, 2.0)
-            val cg = coreGain.v * flickerCore; val ld = lfoDepth.v
-            val wg = whineGain.v * flickerWhine; val eg = energyGain.v; val pg = padGain.v
+            java.util.Arrays.fill(bus, 0.0)
+            voice.render(bus, n)
+            oldVoice?.render(bus, n)
+            for (b in braams) b.render(bus, n)
+            braams.removeAll { it.done }
+
             val mg = master.v; val wetG = wet.v; val dryG = dry.v
-
             for (i in 0 until n) {
-                // core hum + breathing LFO on its gain
-                val core = sin(2 * PI * pC1) + tri(pC2) + 0.3 * sin(2 * PI * pC3)
-                val coreOut = coreLP.process(core) * (cg + ld * sin(2 * PI * pLfo))
-                pC1 += dC1; if (pC1 >= 1) pC1 -= 1
-                pC2 += dC2; if (pC2 >= 1) pC2 -= 1
-                pC3 += dC3; if (pC3 >= 1) pC3 -= 1
-                pLfo += dLfo; if (pLfo >= 1) pLfo -= 1
-
-                // turbine whine
-                val w = sawBlep(pW1, dW1) + 0.5 * sin(2 * PI * pW2)
-                val whineOut = whineBP.process(w) * wg
-                pW1 += dW1; if (pW1 >= 1) pW1 -= 1
-                pW2 += dW2; if (pW2 >= 1) pW2 -= 1
-
-                // energy noise
-                val energyOut = energyBP.process(noise.next()) * eg
-
-                // harmonic pad
-                val pad = sawBlep(pP1, dP1) + sawBlep(pP2, dP2) + sawBlep(pP3, dP3)
-                val padOut = padLP.process(pad) * pg
-                pP1 += dP1; if (pP1 >= 1) pP1 -= 1
-                pP2 += dP2; if (pP2 >= 1) pP2 -= 1
-                pP3 += dP3; if (pP3 >= 1) pP3 -= 1
-
                 // sparkle voices + echo
                 var blip = 0.0
                 for (v in 0 until nVoices) {
@@ -280,13 +271,13 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
                         vAmp[v] *= blipDecay
                         if (vAmp[v] < 1e-5) { vAmp[v] = 0.0; vStage[v] = 0 }
                     }
-                    blip += sin(2 * PI * vPhase[v]) * vAmp[v]
-                    vPhase[v] += vFreq[v] / sr; if (vPhase[v] >= 1) vPhase[v] -= 1
+                    val dt = vFreq[v] / sr
+                    blip += waveSample(vWave[v], vPhase[v], dt) * vAmp[v]
+                    vPhase[v] += dt; if (vPhase[v] >= 1) vPhase[v] -= 1
                 }
                 val echoOut = echo[echoI]
-                echo[echoI] = blip + echoOut * 0.38
-                if (++echoI >= echo.size) echoI = 0
-                val sparkleOut = blip + echoOut
+                echo[echoI] = blip + echoOut * echoFb
+                if (++echoI >= echoLen) echoI = 0
 
                 // boot / shutdown sweep
                 var sweepOut = 0.0
@@ -304,8 +295,8 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
                     if (t > swDur + 0.3) swActive = false
                 }
 
-                val bus = coreOut + whineOut + energyOut + padOut + sparkleOut + sweepOut
-                val mixed = bus * dryG + reverb.process(bus) * wetG
+                val sum = bus[i] + blip + echoOut + sweepOut
+                val mixed = sum * dryG + reverb.process(sum) * wetG
                 var s = softClip(mixed * mg * 1.2) * 0.85
 
                 if (clickLeft > 0) {
@@ -315,13 +306,13 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
                 }
                 out[i] = s.toFloat()
             }
+            if (oldVoice?.finished == true) oldVoice = null
         }
         if (silentEngine && clickLeft > 0) {
-            val sr2 = sampleRate.toDouble()
             for (i in 0 until n) {
                 if (clickLeft <= 0) break
                 out[i] = (0.9 * sin(2 * PI * clickPhase)).toFloat()
-                clickPhase += 2000.0 / sr2; if (clickPhase >= 1) clickPhase -= 1
+                clickPhase += 2000.0 / sr; if (clickPhase >= 1) clickPhase -= 1
                 clickLeft--
             }
         }
@@ -331,60 +322,40 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int) {
 
     private fun updateParams() {
         val speed = inSpeedKmh.toDouble()
-        val s = (speed / 180.0).coerceIn(0.0, 1.0)
         val a = inAccel.toDouble().coerceIn(-1.0, 1.0)
-        val ap = max(a, 0.0); val an = max(-a, 0.0)
+        val an = max(-a, 0.0)
         val on = powered && !testMute
+        val p = pack
 
-        val mTarget = if (on) 0.8 * inDuck * userVolume else 0.0
-        master.to(mTarget, k(if (testMute) 0.03 else masterTc))
-
-        val kFast = k(0.05)
-        coreF.to(42 + s * 70, kFast)
-        coreCut.to(250 + ap * 900 + s * 300, kFast)
-        coreGain.to(0.28 + ap * 0.1, k(0.08))
-        lfoDepth.to(if (speed < 3) 0.12 else 0.03, k(0.4))
-
-        whineF.to(180 + s * 1700 + ap * 120 - an * 90, k(0.08))
-        whineGain.to(if (speed < 1) 0.004 else 0.012 + s * 0.05 + ap * 0.05 + an * 0.03, kFast)
-
-        energyF.to(600 + ap * 3500 + s * 800, kFast)
-        energyGain.to(ap * 0.22 + an * 0.05, kFast)
-
-        padRoot.to(110 * 2.0.pow(s), k(0.1))
-        padCut.to(180 + ap * 2600 + s * 500, kFast)
-        padGain.to(0.035 + ap * 0.06 + s * 0.02, kFast)
-
-        wet.to(if (inTunnel) 0.65 else 0.0, k(0.5))
+        master.to(if (on) 0.8 * inDuck * userVolume else 0.0, k(if (testMute) 0.03 else masterTc))
+        wet.to(min(1.0, p.space + if (inTunnel) 0.6 else 0.0), k(0.5))
         dry.to(if (inTunnel) 1.1 else 1.0, k(0.5))
 
         // low battery: occasional flicker, checked roughly every 16 ms like the web version
         flickerTimer += blockSec
         if (flickerTimer >= 0.016) {
             flickerTimer = 0.0
-            if (inLowBattery) {
-                flickerCore = if (rng.nextDouble() < 0.05) 0.25 else 1.0
-                flickerWhine = 0.8 + rng.nextDouble() * 0.4
-            } else { flickerCore = 1.0; flickerWhine = 1.0 }
+            flickerNow = rng.nextDouble() < 0.05
+            jitter = 0.8 + rng.nextDouble() * 0.4
         }
 
+        if (voice.update(speed, a, inLowBattery, flickerNow, jitter, blockSec) && on) p.braam?.let { startBraam(it) }
+        oldVoice?.update(speed, a, inLowBattery, flickerNow, jitter, blockSec)
+
         // regen sparkle
+        val spark = p.spark
         if (on && an > 0.08 && speed > 4) {
-            sparkAcc += an * blockSec * 9
-            while (sparkAcc > 1) {
-                startBlip(scale[rng.nextInt(scale.size)], 0.02 + an * 0.05)
-                sparkAcc -= 1
-            }
-            sparkLevel = min(1.0, sparkLevel + blockSec * 4)
+            if (spark != null) {
+                sparkAcc += an * blockSec * 9
+                while (sparkAcc > 1) {
+                    startBlip(spark.scale[rng.nextInt(spark.scale.size)], (0.02 + an * 0.05) * spark.vol, spark.wave)
+                    sparkAcc -= 1
+                }
+                sparkLevel = min(1.0, sparkLevel + blockSec * 4)
+            } else sparkLevel = min(1.0, an * 1.5)
         } else sparkLevel = max(0.0, sparkLevel - blockSec * 2)
 
-        meterCore = min(1.0, coreGain.v / 0.4).toFloat()
-        meterWhine = min(1.0, whineGain.v / 0.11).toFloat()
-        meterEnergy = min(1.0, energyGain.v / 0.22).toFloat()
-        meterPad = min(1.0, padGain.v / 0.115).toFloat()
-        meterSpark = sparkLevel.toFloat()
+        for (i in 0 until 5) meters[i] = voice.meters[i].coerceIn(0.0, 1.0).toFloat()
+        meters[5] = sparkLevel.toFloat()
     }
-
-    /** Level of the master bus target, for UI only. */
-    val masterLevel: Float get() = abs(master.v).toFloat()
 }

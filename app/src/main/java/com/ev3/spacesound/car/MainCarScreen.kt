@@ -14,7 +14,8 @@ import androidx.car.app.model.Template
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.ev3.spacesound.AppState
-import com.ev3.spacesound.CruiseMode
+import com.ev3.spacesound.PackPrefs
+import com.ev3.spacesound.audio.Packs
 import com.ev3.spacesound.EngineService
 import java.util.Locale
 
@@ -51,7 +52,7 @@ class MainCarScreen(carContext: CarContext) : Screen(carContext) {
             val c = svc.controller; val e = svc.engine; val m = svc.motion
             val gps = m.gpsSpeedMs; val car = AppState.carSpeedKmh
             pane.addRow(
-                Row.Builder().setTitle("${c.modeLabel}")
+                Row.Builder().setTitle("${e.pack.name} · ${c.modeLabel}")
                     .addText("정속 ${c.cruiseMode.label} · 터널 ${c.tunnelMode.label} · 입력 ${c.source.label}")
                     .build()
             )
@@ -89,9 +90,12 @@ class MainCarScreen(carContext: CarContext) : Screen(carContext) {
         }
 
         val strip = ActionStrip.Builder().addAction(
-            Action.Builder().setTitle("정속 모드").setOnClickListener {
-                AppState.service?.controller?.let {
-                    it.cruiseMode = CruiseMode.entries[(it.cruiseMode.ordinal + 1) % CruiseMode.entries.size]
+            Action.Builder().setTitle("사운드 팩").setOnClickListener {
+                AppState.service?.engine?.let {
+                    val next = (it.packIndex + 1) % Packs.all.size
+                    it.selectPack(next)
+                    PackPrefs.save(carContext, next)
+                    CarToast.makeText(carContext, Packs.all[next].name, CarToast.LENGTH_SHORT).show()
                 }
                 invalidate()
             }.build()
