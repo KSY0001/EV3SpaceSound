@@ -94,10 +94,10 @@ class Noise {
 }
 
 /** Small Freeverb-style reverb (4 combs + 2 allpasses) for the tunnel effect. */
-class Reverb(sampleRate: Int) {
+class Reverb(sampleRate: Int, spread: Int = 0) {
     private val scale = sampleRate / 44100.0
-    private val combs = intArrayOf(1557, 1617, 1491, 1422).map { Comb((it * scale).toInt(), 0.86, 0.22) }
-    private val allpasses = intArrayOf(556, 441).map { Allpass((it * scale).toInt(), 0.5) }
+    private val combs = intArrayOf(1557, 1617, 1491, 1422).map { Comb(((it + spread) * scale).toInt(), 0.87, 0.22) }
+    private val allpasses = intArrayOf(556, 441).map { Allpass(((it + spread) * scale).toInt(), 0.5) }
 
     fun process(x: Double): Double {
         val input = x * 0.2

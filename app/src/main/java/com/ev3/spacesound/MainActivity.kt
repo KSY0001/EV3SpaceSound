@@ -36,6 +36,8 @@ class MainActivity : Activity() {
     private lateinit var btnCruise: Button
     private lateinit var btnPack: Button
     private lateinit var btnFocus: Button
+    private lateinit var btnOut: Button
+    private var outDevIndex = -1
     private lateinit var packInfo: TextView
     private lateinit var btnTunnel: Button
     private lateinit var btnBattery: Button
@@ -65,7 +67,7 @@ class MainActivity : Activity() {
             androidx.car.app.connection.CarConnection.CONNECTION_TYPE_PROJECTION -> "안드로이드 오토 연결됨"
             androidx.car.app.connection.CarConnection.CONNECTION_TYPE_NATIVE -> "차량 자체 OS"
             else -> "연결 안 됨"
-        }
+        } + " (유형 $t)"
     }
 
     override fun onDestroy() {
@@ -154,6 +156,9 @@ class MainActivity : Activity() {
         root.addView(btnBattery, lp(top = 8))
         btnFocus = button("") { svc?.let { it.setFocus(!it.focusMode) } ?: needService() }
         root.addView(btnFocus, lp(top = 8))
+        btnOut = button("출력 장치: 자동") { cycleOutput() }
+        root.addView(btnOut, lp(top = 8))
+        root.addView(text("유선 연결에서 소리가 안 나면 상태창의 '출력' 줄을 확인하고, 이 버튼으로 출력 장치를 바꿔보세요.", 12f, muted), lp(top = 4))
         root.addView(text("차에서 소리가 안 나면 켜두세요. 켜면 차가 안드로이드 오토 오디오로 전환되고, 재생 중인 음악은 멈추지 않고 작아집니다.", 12f, muted), lp(top = 4))
 
         root.addView(text("볼륨", 13f, muted), lp(top = 12))
@@ -245,6 +250,7 @@ class MainActivity : Activity() {
         sb.append(String.format(Locale.US, "%-6s %s\n", "AA", AppState.projection))
         sb.append(String.format(Locale.US, "%-6s %s\n", "모드", c.modeLabel))
         sb.append(String.format(Locale.US, "%-6s %s\n", "오디오", s.focusNote))
+        sb.append(String.format(Locale.US, "%-6s %s\n", "출력", DeviceNames.name(e.routedDevice)))
         c.demoStep?.let { sb.append(String.format(Locale.US, "%-6s %s\n", "데모", it)) }
         sb.append(String.format(Locale.US, "%-6s %.0f km/h  (가속 %+.2f)\n", "속도", c.speedKmh, c.accelN))
         sb.append(String.format(Locale.US, "%-6s %s · 갱신 %.1fHz · %s\n", "GPS",
@@ -278,6 +284,22 @@ class MainActivity : Activity() {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         startActivity(Intent.createChooser(intent, "기록 공유"))
+    }
+
+    private fun cycleOutput() {
+        val e = svc?.engine ?: return needService()
+        val am = getSystemService(android.media.AudioManager::class.java)
+        val devices = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS).filter { it.isSink }
+        outDevIndex++
+        if (outDevIndex >= devices.size) {
+            outDevIndex = -1
+            e.setPreferredDevice(null)
+            btnOut.text = "출력 장치: 자동"
+        } else {
+            val d = devices[outDevIndex]
+            val ok = e.setPreferredDevice(d)
+            btnOut.text = "출력 장치: " + DeviceNames.name(d) + if (ok) "" else " (실패)"
+        }
     }
 
     private fun needService() = toast("먼저 '서비스 시작'을 눌러주세요")
