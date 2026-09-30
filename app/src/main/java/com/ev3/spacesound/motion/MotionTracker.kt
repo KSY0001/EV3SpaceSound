@@ -57,6 +57,8 @@ class MotionTracker(private val context: Context) : SensorEventListener, Locatio
     /** Forward acceleration in m/s² (positive = speeding up). */
     @Volatile var accelFwd = 0f; private set
     @Volatile var status = "대기"; private set
+    /** Rotation rate around the vertical axis (rad/s), smoothed. Large while turning. */
+    @Volatile var yawRate = 0f; private set
 
     val gpsAgeMs: Long
         get() = if (lastFixNanos == 0L) Long.MAX_VALUE
@@ -73,6 +75,7 @@ class MotionTracker(private val context: Context) : SensorEventListener, Locatio
         val lin = sm.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
         if (grav != null) sm.registerListener(this, grav, SensorManager.SENSOR_DELAY_GAME, h)
         if (lin != null) sm.registerListener(this, lin, SensorManager.SENSOR_DELAY_GAME, h)
+        sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, h) }
 
         val hasLoc = context.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
@@ -100,6 +103,10 @@ class MotionTracker(private val context: Context) : SensorEventListener, Locatio
             Sensor.TYPE_GRAVITY -> {
                 val n = sqrt(e.values[0] * e.values[0] + e.values[1] * e.values[1] + e.values[2] * e.values[2])
                 if (n > 1f) for (i in 0..2) g[i] = e.values[i] / n
+            }
+            Sensor.TYPE_GYROSCOPE -> {
+                val yaw = e.values[0] * g[0] + e.values[1] * g[1] + e.values[2] * g[2]
+                yawRate += (yaw - yawRate) * 0.2f
             }
             Sensor.TYPE_LINEAR_ACCELERATION -> {
                 sensorRate.tick()

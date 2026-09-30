@@ -137,6 +137,7 @@ internal class PackVoice(val pack: SoundPack, private val sr: Int, private val k
     // ---------- braam trigger ----------
     private var braamArmed = true
     private var braamCool = 0.0
+    private var braamHold = 0.0
 
     init {
         d.voices.forEachIndexed { i, v -> dBank.setVoice(i, v.ratio, v.gain, null) }
@@ -155,7 +156,7 @@ internal class PackVoice(val pack: SoundPack, private val sr: Int, private val k
     }
 
     /** Per-block control update. Returns true when the pack wants a braam fired now. */
-    fun update(speedKmh: Double, accel: Double, lowBattery: Boolean, flickerNow: Boolean, jitterNow: Double, blockSec: Double): Boolean {
+    fun update(speedKmh: Double, accel: Double, lowBattery: Boolean, flickerNow: Boolean, jitterNow: Double, blockSec: Double, braamHoldSec: Double = 0.0): Boolean {
         fade.to(fadeTarget, k(if (fadeTarget > 0) 0.3 else 0.25))
         speed = speedKmh; s = (speedKmh / 180.0).coerceIn(0.0, 1.0)
         ap = max(accel, 0.0); an = max(-accel, 0.0)
@@ -270,7 +271,8 @@ internal class PackVoice(val pack: SoundPack, private val sr: Int, private val k
         var fire = false
         pack.braam?.let { b ->
             braamCool -= blockSec
-            if (fadeTarget > 0 && ap > b.th && braamArmed && braamCool <= 0) { fire = true; braamArmed = false; braamCool = 3.0 }
+            braamHold = if (ap > b.th) braamHold + blockSec else 0.0
+            if (fadeTarget > 0 && braamHold > braamHoldSec && braamArmed && braamCool <= 0) { fire = true; braamArmed = false; braamCool = 3.0 }
             if (ap < b.th * 0.4) braamArmed = true
         }
         return fire

@@ -21,6 +21,14 @@ class Biquad(private val sampleRate: Int) {
         a1 = -2 * c / a0; a2 = (1 - alpha) / a0
     }
 
+    fun highpass(freq: Double, q: Double) {
+        val (w, alpha) = prep(freq, q)
+        val c = cos(w)
+        val a0 = 1 + alpha
+        b0 = (1 + c) / 2 / a0; b1 = -(1 + c) / a0; b2 = b0
+        a1 = -2 * c / a0; a2 = (1 - alpha) / a0
+    }
+
     fun bandpass(freq: Double, q: Double) {
         val (w, alpha) = prep(freq, q)
         val c = cos(w)

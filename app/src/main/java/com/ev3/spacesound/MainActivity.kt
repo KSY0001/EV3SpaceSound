@@ -28,6 +28,9 @@ class MainActivity : Activity() {
     private val ui = Handler(Looper.getMainLooper())
     private lateinit var status: TextView
     private lateinit var meters: TextView
+    private lateinit var diag: TextView
+    private lateinit var btnRegen: Button
+    private lateinit var btnSpool: Button
     private lateinit var progressText: TextView
     private lateinit var btnService: Button
     private lateinit var btnPower: Button
@@ -105,13 +108,14 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(20), dp(16), dp(32))
         }
         root.addView(text("EV3 우주선 사운드", 24f, fg, bold = true))
-        root.addView(text("엔진음·반응 지연 테스트 버전", 13f, muted))
+        root.addView(text("차량 속도 기반 · 디버그 버전", 13f, muted))
 
         status = text("", 14f, fg, mono = true).also { it.background = card(); it.setPadding(dp(14), dp(12), dp(14), dp(12)) }
         root.addView(status, lp(top = 14))
 
         meters = text("", 13f, ion, mono = true)
         root.addView(meters, lp(top = 8))
+        diag = text("", 12f, fg, mono = true).also { it.background = card(); it.setPadding(dp(14), dp(12), dp(14), dp(12)) }
 
         root.addView(section("서비스"))
         btnService = button("서비스 시작") {
@@ -135,7 +139,8 @@ class MainActivity : Activity() {
         btnSource = button("") {
             svc?.controller?.let {
                 it.stopDemo()
-                it.source = if (it.source == Source.SIM) Source.REAL else Source.SIM
+                it.source = Source.entries[(it.source.ordinal + 1) % Source.entries.size]
+                it.let { c -> svc?.logger?.event("input", c.source.name) }
             } ?: needService()
         }
         btnDemo = button("데모 주행") {
@@ -146,7 +151,12 @@ class MainActivity : Activity() {
         val go = holdButton("가속 (누르고 있기)", 1f, ion)
         val brake = holdButton("회생제동 (누르고 있기)", -0.8f, regen)
         root.addView(row(go, brake))
-        root.addView(text("가속·회생 버튼은 시뮬레이션 모드에서만 작동해요. 실제 주행 모드에서는 GPS와 가속도 센서 값을 씁니다.", 12f, muted), lp(top = 4))
+        root.addView(text("입력 버튼을 누를 때마다 자동 → 차량 속도만 → 차량+폰 → 폰 → 시뮬레이션 순으로 바뀌어요. 자동은 차량 속도가 끊기면 폰 GPS·센서로 넘어갑니다. 가속·회생 버튼은 시뮬레이션에서만 작동해요.", 12f, muted), lp(top = 4))
+        btnRegen = button("") {
+            svc?.engine?.let { it.regenStyle = com.ev3.spacesound.audio.RegenStyle.entries[(it.regenStyle.ordinal + 1) % com.ev3.spacesound.audio.RegenStyle.entries.size] } ?: needService()
+        }
+        btnSpool = button("") { svc?.controller?.let { it.spool = !it.spool } ?: needService() }
+        root.addView(row(btnRegen, btnSpool))
 
         root.addView(section("사운드 설정"))
         btnCruise = button("") { svc?.controller?.let { it.cruiseMode = next(it.cruiseMode) } ?: needService() }
@@ -188,6 +198,10 @@ class MainActivity : Activity() {
         }
         root.addView(bass)
 
+        root.addView(section("진단"))
+        root.addView(text("차량 속도가 어떻게 들어오는지 보여줘요. 문제가 있으면 이 화면을 캡처해서 보내주세요.", 12f, muted))
+        root.addView(diag, lp(top = 8))
+
         root.addView(section("반응 지연 측정"))
         root.addView(text("차에 연결한 상태에서, 주차 중에 조용히 측정하세요. 폰을 평소 거치 위치에 두고 음악은 끄세요. 짧은 '삑' 소리가 7번 납니다.", 12f, muted))
         btnLatency = button("지연 측정 시작") {
@@ -199,7 +213,7 @@ class MainActivity : Activity() {
         root.addView(progressText, lp(top = 6))
 
         root.addView(section("주행 기록"))
-        root.addView(text("GPS·차량 속도·가속도의 갱신 주기와 값을 CSV로 저장해요. 실제 주행 모드에서 기록하면 센서 반응을 비교할 수 있어요.", 12f, muted))
+        root.addView(text("drive_*.csv에 20ms마다 상태를, events_*.csv에 차량 속도 원값이 들어올 때마다 한 줄씩 기록해요. 주행 후 '최근 기록 공유'로 두 파일을 보내주세요.", 12f, muted))
         btnLog = button("기록 시작") {
             val s = svc ?: return@button needService()
             if (s.logger.active) { s.logger.stop(); toast("저장됨: ${s.logger.file?.name}") } else s.logger.start()
@@ -225,15 +239,18 @@ class MainActivity : Activity() {
         if (s == null) {
             status.text = "서비스가 꺼져 있어요.\n'서비스 시작'을 누르면 엔진음 준비가 됩니다."
             meters.text = ""
-            listOf(btnPower, btnPack, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnFocus, btnLog, btnLatency).forEach { it.alpha = 0.4f }
+            listOf(btnPower, btnPack, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnFocus, btnLog, btnLatency, btnRegen, btnSpool).forEach { it.alpha = 0.4f }
+            btnRegen.text = "제동음: -"; btnSpool.text = "가속 반응: -"; diag.text = carDiag(null)
             btnPack.text = "팩: " + com.ev3.spacesound.audio.Packs.all[PackPrefs.load(this)].name; packInfo.text = ""
             btnSource.text = "입력: -"; btnCruise.text = "정속: -"; btnTunnel.text = "터널: -"; btnBattery.text = "배터리 부족 연출: -"; btnFocus.text = "차 오디오 전환: -"
             return
         }
-        listOf(btnPower, btnPack, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnFocus, btnLog, btnLatency).forEach { it.alpha = 1f }
+        listOf(btnPower, btnPack, btnSource, btnDemo, btnCruise, btnTunnel, btnBattery, btnFocus, btnLog, btnLatency, btnRegen, btnSpool).forEach { it.alpha = 1f }
         val c = s.controller; val e = s.engine; val m = s.motion
         btnPower.text = if (e.powered) "사운드 끄기" else "사운드 켜기"
         btnSource.text = "입력: ${c.source.label}"
+        btnRegen.text = "제동음: ${e.regenStyle.label}"
+        btnSpool.text = "가속 반응: " + if (c.spool) "스풀업" else "즉시"
         btnDemo.text = if (c.demoRunning) "데모 중지" else "데모 주행"
         btnCruise.text = "정속: ${c.cruiseMode.label}"
         btnPack.text = "팩: ${e.pack.name}  (눌러서 다음 팩)"
@@ -241,7 +258,7 @@ class MainActivity : Activity() {
         packInfo.text = e.pack.desc
         btnTunnel.text = "터널: ${c.tunnelMode.label}"
         btnBattery.text = "배터리 부족 연출: " + if (c.lowBatteryManual) "켜짐" else "자동(차량 20% 미만)"
-        btnLog.text = if (s.logger.active) "기록 중지 (${s.logger.rows}행)" else "기록 시작"
+        btnLog.text = if (s.logger.active) "기록 중지 (${s.logger.rows}행 · 이벤트 ${s.logger.eventRows})" else "기록 시작"
         btnLatency.isEnabled = !AppState.latencyRunning
 
         val gps = m.gpsSpeedMs
@@ -252,21 +269,64 @@ class MainActivity : Activity() {
         sb.append(String.format(Locale.US, "%-6s %s\n", "오디오", s.focusNote))
         sb.append(String.format(Locale.US, "%-6s %s\n", "출력", DeviceNames.name(e.routedDevice)))
         c.demoStep?.let { sb.append(String.format(Locale.US, "%-6s %s\n", "데모", it)) }
-        sb.append(String.format(Locale.US, "%-6s %.0f km/h  (가속 %+.2f)\n", "속도", c.speedKmh, c.accelN))
+        sb.append(String.format(Locale.US, "%-6s %s%s\n", "입력", c.activeInput, if (c.inputNote.isNotEmpty()) " · " + c.inputNote else ""))
+        sb.append(String.format(Locale.US, "%-6s %.1f km/h · 가속 %+.2f m/s² → 소리 %+.2f\n", "속도", c.speedKmh, c.accelMs2, c.accelSound))
         sb.append(String.format(Locale.US, "%-6s %s · 갱신 %.1fHz · %s\n", "GPS",
             if (gps.isNaN()) "-" else String.format(Locale.US, "%.0f km/h", gps * 3.6f), m.gpsRate.hz(), ageText(m.gpsAgeMs)))
         sb.append(String.format(Locale.US, "%-6s %s · 갱신 %.1fHz · %s\n", "차량",
-            if (car.isNaN()) "-" else String.format(Locale.US, "%.0f km/h", car), AppState.carSpeedRate.hz(), AppState.carDataNote))
+            if (car.isNaN()) "-" else String.format(Locale.US, "%.1f km/h", car), CarSpeed.rate.hz(), AppState.carDataNote))
         sb.append(String.format(Locale.US, "%-6s %.0fHz · %s\n", "가속센서", m.sensorRate.hz(), m.status))
         if (!AppState.carBatteryPct.isNaN()) sb.append(String.format(Locale.US, "%-6s %.0f%%\n", "배터리", AppState.carBatteryPct))
         sb.append(String.format(Locale.US, "%-6s %d프레임 (%.1f ms) · 언더런 %d\n", "버퍼",
             e.bufferFrames, e.bufferFrames * 1000.0 / e.sampleRate, e.underruns))
+        sb.append(String.format(Locale.US, "%-6s 피크 %.2f · 리미터 %.1f dB\n", "출력레벨", e.peakOut, e.limiterDb))
         sb.append(String.format(Locale.US, "%-6s %s", "지연", AppState.latencySummary))
         if (s.fgsNote.isNotEmpty()) sb.append("\n⚠ ").append(s.fgsNote)
         status.text = sb.toString()
+        diag.text = carDiag(s)
 
         val mm = e.meters
-        meters.text = "드론 ${bar(mm[0])}\n톤   ${bar(mm[1])}\n에너지 ${bar(mm[2])}\n패드 ${bar(mm[3])}\n라이저 ${bar(mm[4])}\n충전 ${bar(mm[5])}"
+        meters.text = "드론 ${bar(mm[0])}\n톤   ${bar(mm[1])}\n에너지 ${bar(mm[2])}\n패드 ${bar(mm[3])}\n라이저 ${bar(mm[4])}\n제동 ${bar(mm[5])}"
+    }
+
+    /** Detailed car-data diagnostics for the 진단 card. */
+    private fun carDiag(s: EngineService?): String {
+        val sb = StringBuilder()
+        fun line(k: String, v: String) { sb.append(String.format(Locale.US, "%-8s %s\n", k, v)) }
+        line("AA", AppState.projection)
+        line("세션", AppState.sessionState + " · " + (if (AppState.sessionSince == 0L) "-" else
+            String.format(Locale.US, "%.0fs 전", (android.os.SystemClock.elapsedRealtime() - AppState.sessionSince) / 1000.0)))
+        line("세션이력", AppState.sessionHistory().ifEmpty { "-" })
+        line("API", "레벨 ${AppState.carApiLevel} · 호스트 ${AppState.hostInfo}")
+        line("권한", AppState.carPermNote)
+        line("상태", AppState.carDataNote)
+        val lr = CarSpeed.lastRaw
+        line("콜백", "전체 ${CarSpeed.total} · 사용 ${CarSpeed.usable} · 같은값 ${CarSpeed.repeats}")
+        line("필드", "raw ${CarSpeed.rawSeen}회 · display ${CarSpeed.dispSeen}회")
+        if (lr != null) {
+            line("원값", String.format(Locale.US, "raw %s (상태 %d) · display %s (상태 %d)",
+                if (lr.raw.isNaN()) "-" else String.format(Locale.US, "%.2f", lr.raw * 3.6f), lr.rawStatus,
+                if (lr.disp.isNaN()) "-" else String.format(Locale.US, "%.2f", lr.disp * 3.6f), lr.dispStatus))
+        }
+        line("주기", String.format(Locale.US, "%.1fHz · 평균 %.0fms · 최소 %s · 최대 %.0fms · 흔들림 %.0fms",
+            CarSpeed.rate.hz(), CarSpeed.intervalAvgMs,
+            if (CarSpeed.intervalMinMs.isNaN()) "-" else String.format(Locale.US, "%.0fms", CarSpeed.intervalMinMs),
+            CarSpeed.intervalMaxMs, CarSpeed.jitterMs))
+        line("해상도", (if (CarSpeed.minStepKmh.isNaN()) "-" else String.format(Locale.US, "최소 변화 %.2f km/h", CarSpeed.minStepKmh)) +
+            " · 소수점 " + (if (CarSpeed.fractional) "있음" else "없음(정수)"))
+        line("전달지연", if (CarSpeed.deliveryAvgMs.isNaN()) "-" else String.format(Locale.US, "%.0f ms (값 시각 → 수신)", CarSpeed.deliveryAvgMs))
+        val est = CarSpeed.estimate()
+        line("추정", String.format(Locale.US, "%.1f km/h · 가속 %+.2f m/s² · 표본 %d · %s",
+            est.speedMs * 3.6f, est.accel, est.samplesInWindow,
+            if (est.ageMs == Long.MAX_VALUE) "수신 없음" else "${est.ageMs}ms 전"))
+        if (s != null) {
+            val m = s.motion; val c = s.controller
+            line("폰가속", String.format(Locale.US, "%+.2f m/s² · 회전 %+.2f rad/s · %s", m.accelFwd, m.yawRate, if (m.calibrated) "보정됨" else "미보정"))
+            if (c.hybridGate.isNotEmpty()) line("혼합판단", c.hybridGate)
+        }
+        line("차가속도", String.format(Locale.US, "%.1fHz · 상태 %d · %s", AppState.carAccRate.hz(), AppState.carAccStatus, AppState.carAccText))
+        line("차자이로", String.format(Locale.US, "%.1fHz · 상태 %d · %s", AppState.carGyroRate.hz(), AppState.carGyroStatus, AppState.carGyroText))
+        return sb.toString().trimEnd()
     }
 
     private fun ageText(ms: Long) = if (ms == Long.MAX_VALUE) "수신 없음" else String.format(Locale.US, "%.1fs 전", ms / 1000.0)

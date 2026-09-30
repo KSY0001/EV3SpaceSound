@@ -53,20 +53,20 @@ class MainCarScreen(carContext: CarContext) : Screen(carContext) {
             val gps = m.gpsSpeedMs; val car = AppState.carSpeedKmh
             pane.addRow(
                 Row.Builder().setTitle("${e.pack.name} · ${c.modeLabel}")
-                    .addText("정속 ${c.cruiseMode.label} · 터널 ${c.tunnelMode.label} · 입력 ${c.source.label}")
+                    .addText("입력 ${c.activeInput}" + (if (c.inputNote.isNotEmpty()) " · ${c.inputNote}" else "") + " · 제동음 ${e.regenStyle.label}")
                     .build()
             )
             pane.addRow(
-                Row.Builder().setTitle(String.format(Locale.US, "속도 %.0f km/h", c.speedKmh))
+                Row.Builder().setTitle(String.format(Locale.US, "속도 %.0f km/h · 가속 %+.1f m/s²", c.speedKmh, c.accelMs2))
                     .addText(
                         "GPS " + (if (gps.isNaN()) "-" else String.format(Locale.US, "%.0f", gps * 3.6f)) +
                         " · 차량 " + (if (car.isNaN()) "-" else String.format(Locale.US, "%.0f", car)) + " km/h"
                     ).build()
             )
             pane.addRow(
-                Row.Builder().setTitle("갱신 주기")
-                    .addText(String.format(Locale.US, "GPS %.1fHz · 차량 %.1fHz · 가속센서 %.0fHz",
-                        m.gpsRate.hz(), AppState.carSpeedRate.hz(), m.sensorRate.hz()))
+                Row.Builder().setTitle(String.format(Locale.US, "차량 속도 %.1fHz · 평균 %.0fms · 최대 %.0fms",
+                        com.ev3.spacesound.CarSpeed.rate.hz(), com.ev3.spacesound.CarSpeed.intervalAvgMs, com.ev3.spacesound.CarSpeed.intervalMaxMs))
+                    .addText(String.format(Locale.US, "GPS %.1fHz · 폰센서 %.0fHz · 세션 %s", m.gpsRate.hz(), m.sensorRate.hz(), AppState.sessionState))
                     .build()
             )
             pane.addRow(

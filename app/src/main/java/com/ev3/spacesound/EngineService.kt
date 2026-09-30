@@ -52,6 +52,8 @@ class EngineService : Service() {
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ev3spacesound:engine")
             .also { it.acquire(4 * 60 * 60 * 1000L) }
+        CarSpeed.eventSink = { logger.speed(it) }
+        AppState.eventSink = { t, d -> logger.event(t, d) }
         AppState.service = this
     }
 
@@ -62,6 +64,8 @@ class EngineService : Service() {
 
     override fun onDestroy() {
         AppState.service = null
+        CarSpeed.eventSink = null
+        AppState.eventSink = null
         abandonFocus()
         controller.stop()
         motion.stop()

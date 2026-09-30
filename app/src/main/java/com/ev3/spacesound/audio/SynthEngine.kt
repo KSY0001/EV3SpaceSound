@@ -34,6 +34,10 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
     @Volatile var userVolume = 0.8f
     /** Bass shelf boost in dB (0..15). */
     @Volatile var bassDb = 0f
+    /** Braking sound style (shared by all packs). */
+    @Volatile var regenStyle = RegenStyle.ABSORB
+    /** The braam only fires after acceleration has been held this long (spool-up mode). */
+    @Volatile var braamHoldSec = 0f
     /** Silences the engine (not the test click) during a latency measurement. */
     @Volatile var testMute = false
 
@@ -98,12 +102,26 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
     private val compAtk = exp(-1.0 / (0.005 * sampleRate))
     private val compRel = exp(-1.0 / (0.2 * sampleRate))
     private var compEnv = 0.0
-    /** Web Audio's compressor adds automatic make-up gain (about +10.5 dB here) before our own 1.5x. */
-    private val makeup = 3.37 * 1.5
+    /** Make-up gain after the compressor. Kept moderate: the old +14 dB drove the output into clipping. */
+    private val makeup = 2.0
+    // subsonic cut (~30 Hz, 4th order): inaudible in a car, but it eats headroom and makes speakers break up
+    private val hpL1 = Biquad(sampleRate).also { it.highpass(30.0, 0.7) }
+    private val hpL2 = Biquad(sampleRate).also { it.highpass(30.0, 0.7) }
+    private val hpR1 = Biquad(sampleRate).also { it.highpass(30.0, 0.7) }
+    private val hpR2 = Biquad(sampleRate).also { it.highpass(30.0, 0.7) }
+    // output peak limiter: instant attack, 120 ms release, ceiling about -3 dBFS
+    private val limCeil = 0.7
+    private val limRel = exp(-1.0 / (0.12 * sampleRate))
+    private var limEnv = 0.0
+    /** Peak output level of the last block (0..1), for the UI. */
+    @Volatile var peakOut = 0f; private set
+    /** How hard the limiter worked in the last block, in dB of gain reduction. */
+    @Volatile var limiterDb = 0f; private set
 
     private var voice = PackVoice(pack, sampleRate, k, 1.0)
     private var oldVoice: PackVoice? = null
     private val braams = ArrayList<BraamVoice>()
+    private val regen = RegenVoice(sampleRate, k)
     private val busL = DoubleArray(blockFrames); private val busR = DoubleArray(blockFrames)
 
     // regen sparkle voices + stereo echo
@@ -308,6 +326,8 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
             oldVoice?.render(busL, busR, n)
             for (b in braams) b.render(busL, busR, n)
             braams.removeAll { it.done }
+            regen.render(busL, busR, n)
+            var peak = 0.0; var minGain = 1.0
 
             val mg = master.v; val wetG = wet.v; val dryG = dry.v
             val bdb = bassDb
@@ -361,8 +381,8 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
                     if (t > swDur + 0.3) swActive = false
                 }
 
-                val inL = busL[i] + bl + eL + gl + sweepOut
-                val inR = busR[i] + brr + eR + gr + sweepOut
+                val inL = hpL2.process(hpL1.process(busL[i] + bl + eL + gl + sweepOut))
+                val inR = hpR2.process(hpR1.process(busR[i] + brr + eR + gr + sweepOut))
                 val sL = eqTopL.process(eqMudL.process(eqBassL.process(inL)))
                 val sR = eqTopR.process(eqMudR.process(eqBassR.process(inR)))
                 val mL = (sL * dryG + revL.process(sL) * wetG) * mg
@@ -372,8 +392,15 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
                 val lvl = max(abs(mL), abs(mR))
                 compEnv = if (lvl > compEnv) lvl + (compEnv - lvl) * compAtk else lvl + (compEnv - lvl) * compRel
                 val grd = if (compEnv > compThr) compThr * (compEnv / compThr).pow(1 / compRatio) / compEnv else 1.0
-                var oL = softClip(mL * grd * makeup) * 0.9
-                var oR = softClip(mR * grd * makeup) * 0.9
+                var oL = mL * grd * makeup
+                var oR = mR * grd * makeup
+                // peak limiter: never lets the output exceed the ceiling, so nothing clips
+                val pk = max(abs(oL), abs(oR))
+                limEnv = if (pk > limEnv) pk else pk + (limEnv - pk) * limRel
+                val lg = if (limEnv > limCeil) limCeil / limEnv else 1.0
+                oL *= lg; oR *= lg
+                if (lg < minGain) minGain = lg
+                if (pk * lg > peak) peak = pk * lg
 
                 if (clickLeft > 0) {
                     val c = 0.9 * sin(2 * PI * clickPhase)
@@ -384,6 +411,8 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
                 out[2 * i] = oL.toFloat(); out[2 * i + 1] = oR.toFloat()
             }
             if (oldVoice?.finished == true) oldVoice = null
+            peakOut = peak.toFloat()
+            limiterDb = (20 * kotlin.math.log10(minGain)).toFloat()
         }
         if (silentEngine && clickLeft > 0) {
             for (i in 0 until n) {
@@ -418,8 +447,11 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
             jitter = 0.8 + rng.nextDouble() * 0.4
         }
 
-        if (voice.update(speed, a, inLowBattery, flickerNow, jitter, blockSec) && on) p.braam?.let { startBraam(it) }
-        oldVoice?.update(speed, a, inLowBattery, flickerNow, jitter, blockSec)
+        val hold = braamHoldSec.toDouble()
+        if (voice.update(speed, a, inLowBattery, flickerNow, jitter, blockSec, hold) && on) p.braam?.let { startBraam(it) }
+        oldVoice?.update(speed, a, inLowBattery, flickerNow, jitter, blockSec, hold)
+        regen.style = regenStyle
+        regen.update(an, speed, on, blockSec)
 
         // plasma crackle
         val c = p.crackle
@@ -430,7 +462,8 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
 
         // regen sparkle
         val spark = p.spark
-        if (on && an > 0.08 && speed > 4) {
+        if (regenStyle != RegenStyle.CLASSIC) sparkLevel = regen.level
+        else if (on && an > 0.08 && speed > 4) {
             if (spark != null) {
                 sparkAcc += an * blockSec * 9
                 while (sparkAcc > 1) {
