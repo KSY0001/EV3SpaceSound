@@ -51,6 +51,11 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
     @Volatile var clickWrittenNanos = 0L; private set
     @Volatile var bufferFrames = 0; private set
     @Volatile var underruns = 0; private set
+    /** Share of each block's real-time budget spent computing it (1.0 = just in time). Smoothed and peak. */
+    @Volatile var cpuLoad = 0f; private set
+    @Volatile var cpuPeak = 0f; private set
+    /** Called (on the audio thread) when the underrun counter grows: (total underruns, buffer frames). */
+    @Volatile var onUnderrun: ((Int, Int) -> Unit)? = null
     val blockFrames = framesPerBurst.coerceIn(64, 480)
 
     private sealed class Cmd {
@@ -186,7 +191,8 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
             .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             .build()
         // Start small; grow when underruns happen (same idea as Oboe's latency tuner).
-        t.setBufferSizeInFrames(blockFrames * 2)
+        // 4 bursts (~20 ms) instead of 2: negligible next to the car's ~300 ms, but far fewer dropouts
+        t.setBufferSizeInFrames(blockFrames * 4)
         bufferFrames = t.bufferSizeInFrames
         t.play()
         track = t
@@ -209,12 +215,17 @@ class SynthEngine(val sampleRate: Int, framesPerBurst: Int, initialPack: Int = 1
         var tuneCounter = 0
         while (running) {
             val t = track ?: break
+            val t0 = System.nanoTime()
             val clickStarts = render(buf)
+            val load = ((System.nanoTime() - t0) / (blockSec * 1e9)).toFloat()
+            cpuLoad += (load - cpuLoad) * 0.02f
+            cpuPeak = if (load > cpuPeak) load else cpuPeak * 0.9995f
             if (clickStarts) clickWrittenNanos = System.nanoTime()
             t.write(buf, 0, buf.size, AudioTrack.WRITE_BLOCKING)
             if (++tuneCounter * blockSec > 0.5) {
                 tuneCounter = 0
                 val u = t.underrunCount
+                if (u > lastUnderruns) onUnderrun?.invoke(u, t.bufferSizeInFrames)
                 if (u > lastUnderruns && t.bufferSizeInFrames + blockFrames <= t.bufferCapacityInFrames) {
                     t.setBufferSizeInFrames(t.bufferSizeInFrames + blockFrames)
                 }

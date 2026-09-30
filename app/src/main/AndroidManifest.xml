@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Android Auto vehicle data -->
     <uses-permission android:name="com.google.android.gms.permission.CAR_SPEED" />
     <uses-permission android:name="com.google.android.gms.permission.CAR_FUEL" />

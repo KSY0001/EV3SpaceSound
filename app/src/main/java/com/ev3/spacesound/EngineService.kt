@@ -53,8 +53,10 @@ class EngineService : Service() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ev3spacesound:engine")
             .also { it.acquire(4 * 60 * 60 * 1000L) }
         CarSpeed.eventSink = { logger.speed(it) }
+        engine.onUnderrun = { n, frames -> logger.event("underrun", "total=$n buffer=$frames") }
         AppState.eventSink = { t, d -> logger.event(t, d) }
         AppState.service = this
+        logger.event("service", "create")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -103,14 +105,36 @@ class EngineService : Service() {
             .build()
         val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             .setAudioAttributes(attrs)
-            .setOnAudioFocusChangeListener { change ->
-                if (change == AudioManager.AUDIOFOCUS_LOSS) { focusRequest = null; focusNote = "다른 앱이 가져감" }
-            }
+            .setOnAudioFocusChangeListener { change -> onFocusChange(change) }
             .build()
         val granted = am.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         focusRequest = if (granted) req else null
         focusNote = if (granted) "요청됨 (차 오디오 전환)" else "거부됨"
     }
+
+    private fun onFocusChange(change: Int) {
+        val name = when (change) {
+            AudioManager.AUDIOFOCUS_GAIN -> "GAIN"
+            AudioManager.AUDIOFOCUS_LOSS -> "LOSS"
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> "LOSS_TRANSIENT"
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> "LOSS_DUCK"
+            else -> "CODE_$change"
+        }
+        focusEvents++
+        logger.event("focus", name)
+        focusNote = when (change) {
+            AudioManager.AUDIOFOCUS_GAIN -> "다시 받음"
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> "잠시 양보 중 (안내 음성 등)"
+            else -> "다른 앱이 가져감 → 2초 뒤 다시 요청"
+        }
+        if (change == AudioManager.AUDIOFOCUS_LOSS) {
+            focusRequest = null
+            // e.g. a music app started: ask again so the car keeps routing our sound
+            main.postDelayed({ if (engine.powered && focusMode) requestFocus() }, 2000)
+        }
+    }
+
+    @Volatile var focusEvents = 0; private set
 
     private fun abandonFocus() {
         val am = getSystemService(AudioManager::class.java)

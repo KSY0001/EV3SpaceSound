@@ -168,6 +168,15 @@ class MainActivity : Activity() {
         root.addView(btnFocus, lp(top = 8))
         btnOut = button("출력 장치: 자동") { cycleOutput() }
         root.addView(btnOut, lp(top = 8))
+        val btnBattOpt = button("배터리 최적화 예외 요청") {
+            val pm = getSystemService(android.os.PowerManager::class.java)
+            if (pm.isIgnoringBatteryOptimizations(packageName)) toast("이미 예외로 설정돼 있어요")
+            else runCatching {
+                startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:$packageName")))
+            }.onFailure { toast("설정 화면을 열 수 없어요") }
+        }
+        root.addView(btnBattOpt, lp(top = 8))
+        root.addView(text("주행 중 소리가 아예 멈춘다면 폰이 앱을 절전시킨 것일 수 있어요. 예외로 설정해 두세요.", 12f, muted), lp(top = 4))
         root.addView(text("유선 연결에서 소리가 안 나면 상태창의 '출력' 줄을 확인하고, 이 버튼으로 출력 장치를 바꿔보세요.", 12f, muted), lp(top = 4))
         root.addView(text("차에서 소리가 안 나면 켜두세요. 켜면 차가 안드로이드 오토 오디오로 전환되고, 재생 중인 음악은 멈추지 않고 작아집니다.", 12f, muted), lp(top = 4))
 
@@ -280,6 +289,10 @@ class MainActivity : Activity() {
         sb.append(String.format(Locale.US, "%-6s %d프레임 (%.1f ms) · 언더런 %d\n", "버퍼",
             e.bufferFrames, e.bufferFrames * 1000.0 / e.sampleRate, e.underruns))
         sb.append(String.format(Locale.US, "%-6s 피크 %.2f · 리미터 %.1f dB\n", "출력레벨", e.peakOut, e.limiterDb))
+        sb.append(String.format(Locale.US, "%-6s 평균 %.0f%% · 최대 %.0f%% (100%%를 넘으면 소리가 끊겨요)\n", "계산부하", e.cpuLoad * 100, e.cpuPeak * 100))
+        sb.append(String.format(Locale.US, "%-6s 우선권 변경 %d회\n", "포커스", s.focusEvents))
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        sb.append(String.format(Locale.US, "%-6s %s\n", "절전", if (pm.isIgnoringBatteryOptimizations(packageName)) "예외 설정됨" else "최적화 대상 (끊길 수 있음)"))
         sb.append(String.format(Locale.US, "%-6s %s", "지연", AppState.latencySummary))
         if (s.fgsNote.isNotEmpty()) sb.append("\n⚠ ").append(s.fgsNote)
         status.text = sb.toString()
